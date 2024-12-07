@@ -18,6 +18,7 @@ set -e
 # 初始化变量
 aff=false  # 是否测试亲和性
 mini=false # 是否启用mini volcano
+vcjob=false # if use vcjob to schedule volcano pods
 
 # 解析参数 -a 和 -m
 while getopts ":am" opt; do
@@ -103,8 +104,8 @@ elif [ "$group" = "5" ]; then
     end_wait_sleep=150
   fi
 elif [ "$group" = "6" ]; then
-  deployment_count=500
-  replicas_count=10
+  deployment_count=5000
+  replicas_count=1
   if [ "$aff" = true ]; then
     start_wait_sleep=200
     end_wait_sleep=150
@@ -147,5 +148,20 @@ end_ts_volcano=$(date +%s)
 sleep_with_progress $end_wait_sleep
 echo "====== use volcano test end ======"
 
-echo "time range: $start_ts_default~$end_ts_default $start_ts_volcano~$end_ts_volcano"
-./query.sh "$group" "$start_ts_default" "$end_ts_default" "$start_ts_volcano" "$end_ts_volcano" "$aff" "$mini"
+echo "====== use volcano with vcjob test start ======"
+start_ts_volcano_vcjob=$(date +%s)
+if [ "$aff" = true ]; then
+  echo "debug: aff == true"
+  ./kwok/deploy-tool.sh -v -j -a -i  0.05 $deployment_count $replicas_count
+else
+  echo "debug: aff != true"
+  ./kwok/deploy-tool.sh -v -j -i 0.05 $deployment_count $replicas_count
+fi
+sleep_with_progress $start_wait_sleep
+end_ts_volcano_vcjob=$(date +%s)
+./kwok/deploy-tool.sh -d -v -j -i  0.05 $deployment_count $replicas_count
+sleep_with_progress $end_wait_sleep
+echo "====== use volcano with vcjob test end ======"
+
+echo "time range: $start_ts_default~$end_ts_default $start_ts_volcano~$end_ts_volcano $start_ts_volcano_vcjob~$end_ts_volcano_vcjob"
+./query.sh "$group" "$start_ts_default" "$end_ts_default" "$start_ts_volcano" "$end_ts_volcano" "$aff" "$mini" "$start_ts_volcano_vcjob" "$end_ts_volcano_vcjob"

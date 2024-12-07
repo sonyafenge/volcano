@@ -21,14 +21,14 @@ set -e
 show_help() {
   cat << EOF
 Invalid option: -$OPTARG
-Usage: $0 [-d] [-v] [-i <interval>] <deployment_count> <replicas_count>
+Usage: $0 [-d] [-v] [-j] [-a] [-i <interval>] <deployment_count> <replicas_count>
 
 Options:
   -d, --delete               Delete the specified number of deployments.
   -v, --volcano              use volcano scheduler.
+  -j, --vcjob                use vcjob to schedule volcano pods
   -a, --affinity             test affinity and non-affinity.
   -i, --interval <interval>  Set the interval between deployments in seconds.
-
 Arguments:
   <deployment_count>         Number of deployments to create or delete (required).
   <replicas_count>           Number of replicas for each deployment (required).
@@ -89,6 +89,56 @@ spec:
         - key: "kwok.x-k8s.io/node"
           operator: "Exists"
           effect: "NoSchedule"
+EOF
+    sleep "$interval"
+  done
+}
+
+deploy_vcjobs() {
+  for (( i=0; i<deployment_count; i++ )); do
+    # 设置调度器名称 to volcano
+    
+    schedulerName="volcano"
+    echo "Scheduler Name: $schedulerName"
+
+    kubectl apply -f - <<EOF
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  name: sleep-vcjob-$i
+spec:
+  minAvailable: 1
+  schedulerName: $schedulerName
+  queue: test
+  policies:
+    - event: PodEvicted
+      action: RestartJob  
+  tasks:
+    - replicas: $replicas_count
+      name: fake-pod
+      policies:
+      - event: TaskCompleted
+        action: CompleteJob
+      template:
+        spec:
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: type
+                    operator: In
+                    values:
+                    - kwok
+          # A taints was added to an automatically created Node.
+          # You can remove taints of Node or add this tolerations.
+          tolerations:
+          - key: "kwok.x-k8s.io/node"
+            operator: "Exists"
+            effect: "NoSchedule"
+          containers:
+          - name: sleep300
+            image: "alpine:latest"  
 EOF
     sleep "$interval"
   done
@@ -225,20 +275,30 @@ delete_deployments(){
     done
 }
 
+delete_vcjobs(){
+    for (( i=0; i<deployment_count; i++ )); do
+        kubectl delete vcjob/sleep-vcjob-"$i"
+    done
+}
+
 # Default values
 volcano=false
 delete=false
+vcjob=false
 aff=false
 interval=0
 
 # Process command-line options
-while getopts ":dvai:" opt; do
+while getopts ":dvjai:" opt; do
   case $opt in
     d)
       delete=true
       ;;
     v)
       volcano=true
+      ;;
+    j)
+      vcjob=true
       ;;
     a)
       aff=true
@@ -272,18 +332,30 @@ replicas_count=$2
 
 # Check if delete flag is set
 if [ "$delete" = true ]; then
-  echo "Deleting $deployment_count deployments with $replicas_count replicas each."
-  delete_deployments
+  if [ "$vcjob" = true ]; then
+    echo "Deleting $deployment_count vcjobs with $replicas_count replicas each."
+    delete_vcjobs
+  else
+    echo "Deleting $deployment_count deployments with $replicas_count replicas each."
+    delete_deployments
+  fi
 else
   if [ "$volcano" = true ]; then
+    echo "debug: volcano == true"
     deploy_queue
   fi
-  if [ "$aff" = true ]; then
-    echo "Deploying $deployment_count deployments with $replicas_count replicas each, with affinity."
-    deploy_deployments_withAff
-  else
-    echo "Deploying $deployment_count deployments with $replicas_count replicas each"
-    deploy_deployments
+  if [ "$vcjob" = true ]; then 
+    echo "debug: vcjob == true"
+    echo "Deploying $deployment_count vcjob with $replicas_count replicas each"
+    deploy_vcjobs
+  else 
+    if [ "$aff" = true ]; then
+      echo "Deploying $deployment_count deployments with $replicas_count replicas each, with affinity."
+      deploy_deployments_withAff
+    else
+      echo "Deploying $deployment_count deployments with $replicas_count replicas each"
+      deploy_deployments
+    fi
   fi
 fi
 
